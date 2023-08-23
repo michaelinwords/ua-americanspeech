@@ -1,13 +1,14 @@
 ### AUTHOR - Ahn Michael
 ### GOAL - For internship in UA American Speech project, train a model to classify academic articles (PDFs)
-###        into pre-defined categories, based on their texts.
+###        into pre-defined categories, based on their texts, then output predictions to an XLSX
 
-## OPTIONS
+#region - OPTIONS
 SCRIPT_MODE = "TRAIN" # which mode the script runs in; either TRAIN or PREDICT
 # for TRAIN mode, need to have an XLSX with PDF metadata and the PDFs to train on
 # for PREDICT mode, need to have an XLSX with PDFs you want to predict the categories of, and those PDFs in a folder
+#endregion - OPTIONS
 
-## IMPORTS & INITIALISATION
+#region - IMPORTS & INITIALISATION
 import os       # for navigating the file system
 import re       # mainly for text preprocessing / normalisation
 import PyPDF2       # for reading PDF files
@@ -20,13 +21,13 @@ from sklearn.multiclass import OneVsRestClassifier      # for handling multi-lab
 from sklearn.metrics import classification_report, f1_score, accuracy_score     # for evaluating the model's performance
 from joblib import dump, load      # for saving and loading model, vectorizer, and label binarizer (to avoid retraining every time we want to make predictions)
 os.system('clear') # clear the terminal
+#endregion - IMPORTS & INITIALISATION
 
-## COLLECTIONS
+#region - COLLECTIONS
 OVERALL_LABELS = ['UNKNOWN', 'CAT_0', 'CAT_1', 'CAT_2', 'CAT_2_1', 'CAT_3', 'CAT_3_1', 'CAT_4', 'CAT_4_1', 'CAT_5', 'CAT_5_1', 'CAT_6', 'CAT_7']
 
-CWD_PATH = ""
+CWD_PATH = "" # this is initialised at the beginning of MAIN
 
-XLS_FOLDER = "XLSX"
 XLS_DF = None
 XLS_ROWS = []
 
@@ -38,8 +39,9 @@ pdfs_total_words = 0
 ALL_DOCS = []
 TRAIN_DOCS = []
 TEST_DOCS = []
+#endregion - COLLECTIONS
 
-## CLASSES
+#region - CLASSES
 class Document:
     def __init__(self, n_row, n_pdfname, n_pdftext, n_title, n_authors, n_doi, n_year, n_month, n_volume, n_issue, n_labels, n_test_or_train) -> None:
         self.row = n_row # should be an integer, specifically not a string
@@ -57,12 +59,14 @@ class Document:
         self.x_vector = [] # the vectorised representation of pdftext (output from TF-IDF vectorizer)
         self.y_golds = [] # list of correct (1) and incorrect (0) labels, in binary format, from spreadsheet data; should be length 13, which is the # of our categories; get from multilabelbinarizer
         self.y_preds = [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1] # unless wanting to validate training data, this will remain -1s/unset for a training document; it will be set with real predictions (1s and 0s) for test and prediction documents
+#endregion - CLASSES
 
-## OTHER FUNCTIONS
+#region - OTHER FUNCTIONS
 # Read in the XLSX file and load its data into global variables
 def read_xlsx(file_name):
     global XLS_DF
     global XLS_ROWS
+    XLS_FOLDER = "XLSX"
 
     XLS_DF = pd.read_excel(f"{CWD_PATH}/{XLS_FOLDER}/{file_name}")
     # replace all NaN values in label columns with 0
@@ -145,13 +149,13 @@ def predict_categories(model, vectorizer, docs):
 def update_xlsx(xlsx_path, predictions):
     # TODO: implement this function
     pass
+#endregion - OTHER FUNCTIONS
 
-
-## MAIN
+#region - MAIN
 
 CWD_PATH = os.path.dirname(os.path.abspath(__file__))
 
-### TRAIN MODE
+#region - TRAIN MODE
 print(f"\n** SCRIPT START in TRAIN mode **")
 if SCRIPT_MODE == "TRAIN":
 
@@ -190,11 +194,11 @@ if SCRIPT_MODE == "TRAIN":
     # output of fit_transform: will be a matrix, where each row is a document from the collection and each column is a word/n-gram from the learned vocabulary
 
     # Customizable TF-IDF options
-    preprocessor = None  # Define custom preprocessor function if needed
-    ngram_range = (1, 1) # Define ngram range
-    binary = False
-    analyzer = 'word'
-    min_df = 1
+    preprocessor = None  # None >> We are already handling preprocessing elsewhere
+    ngram_range = (1, 2) # Define ngram range, get n-grams of these lengths
+    binary = False # False >> We want counts for each token, not just presence
+    analyzer = 'word' # We want word n-grams
+    min_df = 2 # 2 >> We want to remove any terms which only occur once
 
     # Create TF-IDF vectorizer
     vectorizer = TfidfVectorizer(preprocessor=preprocessor,
@@ -243,8 +247,9 @@ if SCRIPT_MODE == "TRAIN":
 
     # - SCRIPT COMPLETE
     print(f"\nSCRIPT (train mode) COMPLETED SUCCESSFULLY ✅")
+#endregion - TRAIN MODE
 
-### PREDICT MODE
+#region - PREDICT MODE
 else:
     print(f"\n** SCRIPT START in PREDICT mode **\n")
 
@@ -274,4 +279,5 @@ else:
 
     # - SCRIPT COMPLETE
     print(f"\nSCRIPT (predict mode) COMPLETED SUCCESSFULLY ✅")
-
+#endregion - PREDICTMODE
+#endregion - MAIN
