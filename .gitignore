@@ -1,0 +1,8 @@
+/.vscode
+/PDFs-predict
+/PDFs-train
+/XLSX
+
+check_interpreter.py
+get-pip.py
+suggested-organising.py
