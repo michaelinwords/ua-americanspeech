@@ -42,6 +42,19 @@ pdfs_total_words = 0
 ALL_DOCS = []
 TRAIN_DOCS = []
 TEST_DOCS = []
+
+X_RAW = [] # List of all document PDF texts >> will go into tfidf-vectoriser to get X
+Y_RAW = [] # List of category lists >> will go into multi-label binarizer to get Y
+
+X_ALL = []
+Y_ALL = []
+
+X_TRAIN = []
+X_TEST = []
+
+Y_TRAIN = []
+Y_TEST = []
+
 #endregion - COLLECTIONS
 
 # VARIABLES
@@ -175,21 +188,18 @@ def make_documents():
         ALL_DOCS.append(new_doc)
         # print(f">> Made a document for PDF name <{pdf_name}> and added to ALL_DOCS list:\n{new_doc.to_string()}\n")
 
-    print(f">> Completed making {len(ALL_DOCS)} document objects - two quick preview documents:\n\n{ALL_DOCS[0].to_string()}\n{ALL_DOCS[-1].to_string()}\n")
-
-def simple_split_test_train():
-    TRAIN_DOCS, TEST_DOCS = train_test_split(ALL_DOCS, test_size=0.2)
-    print(f">> After splitting, there are {len(TRAIN_DOCS)} training documents and {len(TEST_DOCS)} test documents -- {len(ALL_DOCS)} documents total\n")
+    print(f">> Completed making {len(ALL_DOCS)} document objects - two quick preview documents:\n\n{ALL_DOCS[0].to_string()}\n{ALL_DOCS[-1].to_string()}")
 
 # Vectorise the documents using TF-IDF
-def tfidf_vectorise(docs, preprocessor=None, ngram_range=(1,1), binary=False, analyzer='word', min_df=1):
-    vectoriser = TfidfVectorizer(
-        preprocessor=preprocessor,
-        ngram_range=ngram_range,
-        binary=binary,
-        analyzer=analyzer,
-        min_df=min_df
-    )
+def tfidf_vectorise(docs, preprocessor=None, ngram_range=(1,2), binary=False, analyzer='word', min_df=2):
+
+    # Create TF-IDF vectorizer
+    vectoriser = TfidfVectorizer(preprocessor=preprocessor,
+                                 ngram_range=ngram_range,
+                                 binary=binary,
+                                 analyzer=analyzer,
+                                 min_df=min_df)
+
     return vectoriser.fit_transform(docs), vectoriser
 
 # Save the trained model (or vectoriser) to a file
@@ -235,21 +245,6 @@ if SCRIPT_MODE.strip() == "TRAIN":
     print(colored(f"\n📄 CONSTRUCTING DOCUMENT OBJECTS", TERMINAL_MAIN_COLOR))
     make_documents()
 
-    # - SPLIT DATA (Stratified K-Fold, into training and testing sets)
-    # NOTE: Implementation is using the common method of using a single primary category for stratification;
-    # especially useful when the categories are imbalanced, to ensure training and test sets have similar distributions
-    # of this primary category; does not ensure stratification across all categories, which can be more complex
-    print(colored(f"\n📄 SPLITTING DATA (TRAIN-TEST SPLIT)", TERMINAL_MAIN_COLOR))
-    simple_split_test_train()
-    exit()
-
-    # skf = StratifiedKFold(n_splits=2, shuffle=True, random_state=13)
-    # X = [pdf for pdf in PDF_TEXTS_dict.keys()] # list of the pdf names
-    # y = [record['CAT_1'] for record in XLS_ROWS]  # Using CAT_1for stratification
-    # train_index, test_index = next(skf.split(X, y))
-    # TRAIN_DOCS = [X[i] for i in train_index]
-    # TEST_DOCS = [X[i] for i in test_index]
-
     # - MAKE VECTORISER (and vectorise training documents)
     print(colored(f"\n📄 MAKING and FIT-TRANSFORMING TF-IDF VECTORISER", TERMINAL_MAIN_COLOR))
     # - FIT-TRANSFORM VECTORISER (TF-IDF - vectorizer.fit_transform(training_documents))
@@ -264,52 +259,78 @@ if SCRIPT_MODE.strip() == "TRAIN":
     analyzer = 'word' # We want word n-grams
     min_df = 2 # 2 >> We want to remove any terms which only occur once
 
-    # Create TF-IDF vectorizer
-    vectorizer = TfidfVectorizer(preprocessor=preprocessor,
-                                 ngram_range=ngram_range,
-                                 binary=binary,
-                                 analyzer=analyzer,
-                                 min_df=min_df)
-
     # Fit the vectorizer on all texts
-    X = vectorizer.fit_transform(ALL_TEXTS)
+    X_RAW = [doc.pdftext for doc in ALL_DOCS] # all texts, in a list
+    # print(f">> X_RAW is currently:\n{X_RAW[:10]} ..\n")
+    print(f">> X_RAW has been made (not displaying all texts, as that would be too long)\n")
+    X_ALL, vectoriser = tfidf_vectorise(X_RAW, preprocessor, ngram_range, binary, analyzer, min_df)
+    print(f">> X_ALL is currently:\n{X_ALL[:10]} ..\n")
 
     # - ENCODE LABELS (MultiLabelBinarizer, into binary format
     print(colored(f"\n📄 ENCODING LABELS with MLB", TERMINAL_MAIN_COLOR))
     # MLB replaces my previous set_golds_from_labels function, previously in the document class
+    Y_RAW = [doc.category_list for doc in ALL_DOCS] # list of category lists
+    print(f">> Y_RAW is currently:\n{Y_RAW[:10]} ..\n")
     mlb = MultiLabelBinarizer(classes=OVERALL_CATEGORIES)
     mlb.fit(OVERALL_CATEGORIES)
     # ---- TRANSFORM LABELS for each document
-    #! for each train_doc in train_docs:
-    # we pass .transform a list (even though it only has one item) because it expects a list, 
-    # since it usually works on multiple documents at one time; it outputs a matrix (with only one row, 
-    # since one document), and we get that first (only) document
-    #! train_doc.y_golds = mlb.transform([document.labels])[0] 
+    Y_ALL = mlb.transform(Y_RAW)
+    print(f">> Y_ALL is currently:\n{Y_ALL[:10]} ..\n")
 
+    # - SPLIT DATA (Stratified K-Fold or simple train-test-split, into training and testing sets)
+    # NOTE: Implementation is using the common method of using a single primary category for stratification;
+    # especially useful when the categories are imbalanced, to ensure training and test sets have similar distributions
+    # of this primary category; does not ensure stratification across all categories, which can be more complex
+    print(colored(f"\n📄 SPLITTING DATA (TRAIN-TEST SPLIT)", TERMINAL_MAIN_COLOR))
+    
+    X_TRAIN, X_TEST, Y_TRAIN, Y_TEST = train_test_split(X_ALL, Y_ALL, test_size=0.2)
+
+    print(f">> After splitting, there are {X_TRAIN.shape[0]} training documents/rows and {X_TEST.shape[0]} test documents/rows -- {X_ALL.shape[0]} documents/rows total")
+
+    # skf = StratifiedKFold(n_splits=2, shuffle=True, random_state=13)
+    # X = [pdf for pdf in PDF_TEXTS_dict.keys()] # list of the pdf names
+    # y = [record['CAT_1'] for record in XLS_ROWS]  # Using CAT_1for stratification
+    # train_index, test_index = next(skf.split(X, y))
+    # TRAIN_DOCS = [X[i] for i in train_index]
+    # TEST_DOCS = [X[i] for i in test_index]
 
     # - TRAIN CLASSIFIER (fit the model on the training data: model.fit(X_train, y_train))
     print(colored(f"\n📄 TRAINING CLASSIFIER", TERMINAL_MAIN_COLOR))
+
+    # Instantiate the classifier
+    clf = OneVsRestClassifier(LogisticRegression(multi_class='ovr', solver='liblinear'))  # 'liblinear' is a good solver choice for ovr
     # OneVsRestClassifier - is a fit for this task, as it trains a separate binary classifier
-    # for each category, as I imagined early on
-    clf = OneVsRestClassifier(LogisticRegression(max_iter=1000, random_state=42))
-    clf.fit(X_train, y_train)
+    # for each category, as I imagined early on; this does not work properly just setting as an 'ovr' parameter
+    # Train the classifier
+    print(f"X_TRAIN is:\n\n{X_TRAIN}\n\nY_TRAIN is:\n\n{Y_TRAIN}\n\n")
+    clf.fit(X_TRAIN, Y_TRAIN)
 
     # - REVIEW PERFORMANCE (Classification Report)
     print(colored(f"\n📄 REVIEWING PERFORMANCE", TERMINAL_MAIN_COLOR))
+
+    print(f"-- This training was on {X_TRAIN.shape[0]} documents (out of {X_ALL.shape[0]} total documents)\n")
+
+    subset_accuracy = clf.score(X_TEST, Y_TEST)
+    print(f"SUBSET ACCURACY: {subset_accuracy * 100:.2f}%")
+
     # Vectorise the TEST_DOCS and evaluate the model
-    test_texts = [doc.pdf_text for doc in ALL_DOCS if doc.pdf_name in TEST_DOCS]
-    X_test = vectorizer.transform(test_texts)
-    y_test = [[1 if cat in doc.categories else 0 for cat in categories] for doc in ALL_DOCS if doc.pdf_name in TEST_DOCS]
-    y_pred = clf.predict(X_test)
-    print(classification_report(y_test, y_pred, target_names=categories, zero_division=1))
+    Y_PRED = clf.predict(X_TEST)
+    report_dict = classification_report(Y_TEST, Y_PRED, target_names=OVERALL_CATEGORIES, zero_division=1, output_dict=True)
+    # Here, zero division defines what to return if the denominator is 0 (due to some outcomes - true positives, false positives, true negatives, false negatives - possibly having no instances)
+    report_dict['per_label_accuracy'] = (Y_TEST == Y_PRED).mean()
+    report_str = classification_report(Y_TEST, Y_PRED, target_names=OVERALL_CATEGORIES, zero_division=1) + f'\nper_label_accuracy: {report_dict["per_label_accuracy"]:.2f}\n'
+    print(f"CLASSIFICATION REPORT:\n{report_str}")
 
     # - SAVE MODEL
     print(colored(f"\n📄 SAVING MODEL", TERMINAL_MAIN_COLOR))
+    clf_save_name = "model.joblib"
+    vectoriser_save_name = "vectoriser.joblib"
     save_model(clf, "model.joblib")
-    save_model(vectorizer, "vectorizer.joblib")
+    save_model(vectoriser, "vectoriser.joblib")
+    print(f">> Successfully saved classifier as {clf_save_name} and vectoriser as {vectoriser_save_name}")
 
     # - SCRIPT COMPLETE
-    print(colored(f"\n📄 SCRIPT (train mode) COMPLETED SUCCESSFULLY ✅", TERMINAL_MAIN_COLOR))
+    print(colored(f"\n📄 SCRIPT (train mode) COMPLETED SUCCESSFULLY ✅\n", TERMINAL_MAIN_COLOR))
 #endregion - TRAIN MODE
 
 #region - PREDICT MODE
@@ -319,7 +340,7 @@ else:
     # - LOAD MODEL & VECTORISER DATA
     print(colored(f"\n📄 LOADING MODEL & VECTORISER DATA", TERMINAL_MAIN_COLOR))
     clf = load_model("model.joblib")
-    vectorizer = load_model("vectorizer.joblib")
+    vectoriser = load_model("vectoriser.joblib")
 
     # - READ IN DATA
     print(colored(f"\n📄 READING IN DATA", TERMINAL_MAIN_COLOR))
