@@ -7,6 +7,12 @@ SCRIPT_MODE = "TRAIN" # which mode the script runs in; either TRAIN or PREDICT
 # for TRAIN mode, need to have an XLSX with PDF metadata and the PDFs to train on
 # for PREDICT mode, need to have an XLSX with PDFs you want to predict the categories of, and those PDFs in a folder
 TERMINAL_MAIN_COLOR = 'blue' # which color termcolor will use when outputting main script logs
+
+TFIDF_PREPROCESSOR = None  # None >> We are already handling preprocessing elsewhere
+TFIDF_NGRAM_RANGE = (1, 1) # Define ngram range, get n-grams of these lengths
+TFIDF_BINARY = False # False >> We want counts for each token, not just presence
+TFIDF_ANALYSER = 'word' # We want word n-grams
+TFIDF_MIN_DF = 2 # 2 >> We want to remove any terms which only occur once
 #endregion - OPTIONS
 
 #region - IMPORTS & INITIALISATION
@@ -23,11 +29,13 @@ from sklearn.multiclass import OneVsRestClassifier      # for handling multi-lab
 from sklearn.metrics import classification_report, f1_score, accuracy_score     # for evaluating the model's performance
 from joblib import dump, load      # for saving and loading model, vectorizer, and label binarizer (to avoid retraining every time we want to make predictions)
 from termcolor import colored   # for printing colored text in terminal; 100% optional
+import numpy as np
 os.system('clear') # clear the terminal
 #endregion - IMPORTS & INITIALISATION
 
 #region - COLLECTIONS
-OVERALL_CATEGORIES = ['UNKNOWN', 'CAT_0', 'CAT_1', 'CAT_2', 'CAT_2_1', 'CAT_3', 'CAT_3_1', 'CAT_4', 'CAT_4_1', 'CAT_5', 'CAT_5_1', 'CAT_6', 'CAT_7']
+ALL_CATEGORIES = ['UNKNOWN', 'CAT_0', 'CAT_1', 'CAT_2', 'CAT_2_1', 'CAT_3', 'CAT_3_1', 'CAT_4', 'CAT_4_1', 'CAT_5', 'CAT_5_1', 'CAT_6', 'CAT_7']
+USING_CATEGORIES = ['CAT_1', 'CAT_2', 'CAT_2_1', 'CAT_3', 'CAT_4', 'CAT_5', 'CAT_5_1', 'CAT_6', 'CAT_7']
 
 CWD_PATH = "" # this is initialised at the beginning of MAIN
 
@@ -103,7 +111,7 @@ def read_xlsx(file_name):
     XLS_DF = pd.read_excel(f"{CWD_PATH}/{XLS_FOLDER}/{file_name}")
     # print(f"XLS_DF before replacing NaN values:\n{XLS_DF}")
     # replace all NaN values in label columns with 0
-    XLS_DF[OVERALL_CATEGORIES] = XLS_DF[OVERALL_CATEGORIES].fillna(0)
+    XLS_DF[USING_CATEGORIES] = XLS_DF[USING_CATEGORIES].fillna(0)
     print(f"XLS_DF:\n{XLS_DF}")
     XLS_ROWS = XLS_DF.to_dict(orient='records')
     num_xls_rows = len(XLS_ROWS)
@@ -149,14 +157,58 @@ def preview_xls_rows(xls_rows, first_and_last_count):
         print(f"\t >> {row}\n")
 
 # Do preprocessing and normalisation on the text
-def preprocess_text(some_text):
-    preprocessed_text = ""
-    preprocessed_text = some_text.lower()  # lowercase
-    return preprocessed_text
+def preprocess_text(document_text):
+    text_copy = document_text
+    # lowercase all text
+    text_copy = text_copy.lower()
+    # print(f"-> PREPROCESSING: after lowercase:\n{text_copy}")
+
+    # replace references with CITATION: (Person 1900), (Person et al. 2000), Person (2011)
+    citation_pattern = r"(\w+\s)?\(.*\d+.*\)"
+    citation_repl = "CIT"
+    text_copy = re.sub(citation_pattern, citation_repl, text_copy)
+    # print(f"PREPROCESSING: after removing citations, len: {len(text_copy)}, num tokens: {len(text_copy.split(' '))}")
+    # print(f"-> PREPROCESSING: after removing citations:\n{text_copy}")
+
+    # remove all newlines
+    newline_pattern = r"\n"
+    newline_repl = " "
+    text_copy = re.sub(newline_pattern, newline_repl, text_copy)
+    # print(f"PREPROCESSING: after removing newlines, len: {len(text_copy)}, num tokens: {len(text_copy.split(' '))}")
+    # print(f"-> PREPROCESSING: after removing newlines:\n{text_copy}")
+
+    # remove formatting like "this content downloaded from"
+    # format_pattern = r"DFODJFWOIFJWEFOKWJEFOWHO" # TO DO
+    # format_repl = " "
+    # text_copy = re.sub(format_pattern, format_repl, text_copy)
+    # print(f"PREPROCESSING: after removing formatting, len: {len(text_copy)}, num tokens: {len(text_copy.split(' '))}")
+    # print(f"-> PREPROCESSING: after removing formatting:\n{text_copy}")
+
+    # remove all extra white space
+    whitespace_pattern = r"\s\s+"
+    whitespace_repl = " "
+    text_copy = re.sub(whitespace_pattern, whitespace_repl, text_copy)
+    # print(f"PREPROCESSING: after removing extra whitespace, len: {len(text_copy)}, num tokens: {len(text_copy.split(' '))}")
+    # print(f"-> PREPROCESSING: after removing extra whitespace:\n{text_copy}")
+
+    # collapse all other numbers
+    number_pattern = r"(\d+[\s\/]?)+"
+    number_repl = "NUM "
+    text_copy = re.sub(number_pattern, number_repl, text_copy)
+    # print(f"PREPROCESSING: after collapsing numbers, len: {len(text_copy)}, num tokens: {len(text_copy.split(' '))}")
+    # print(f"-> PREPROCESSING: after collapsing numbers:\n{text_copy}")
+
+    # remove punctuation except periods
+    punct_pattern = r"[-,;!?\“\"\”\'\’]"
+    punct_repl = ""
+    text_copy = re.sub(punct_pattern, punct_repl, text_copy)
+    # print(f"PREPROCESSING: after removing punctuation, len: {len(text_copy)}, num tokens: {len(text_copy.split(' '))}")
+    # print(f"-> PREPROCESSING: after removing punctuation:\n{text_copy}")
+    return text_copy
 
 def get_present_category_list(single_xls_row):
     category_list = []
-    for category in OVERALL_CATEGORIES:
+    for category in USING_CATEGORIES:
         if single_xls_row[category].iloc[0] == 1:
             category_list.append(category)
     
@@ -189,6 +241,46 @@ def make_documents():
         # print(f">> Made a document for PDF name <{pdf_name}> and added to ALL_DOCS list:\n{new_doc.to_string()}\n")
 
     print(f">> Completed making {len(ALL_DOCS)} document objects - two quick preview documents:\n\n{ALL_DOCS[0].to_string()}\n{ALL_DOCS[-1].to_string()}")
+
+def sanitise_string(s):
+    # Remove unpermitted characters from the string to allow Excel writing
+    # Allow line feed (ASCII 10) and carriage return (ASCII 13)
+    allowed_chars = {10, 13}
+    
+    # Filter out "illegal" characters
+    sanitised_string = "".join([char for char in s if ord(char) >= 32 or ord(char) in allowed_chars])
+    
+    return sanitised_string
+
+def create_xlsx_from_all_docs():
+    # Extract data from each Document object in ALL_DOCS
+    global ALL_DOCS
+    rows_data = []
+    for doc in ALL_DOCS:
+        row_data = [
+            sanitise_string(doc.pdfname),
+            sanitise_string(doc.pdftext),
+            sanitise_string(doc.title),
+            sanitise_string(doc.authors),
+            sanitise_string(doc.doi),
+            sanitise_string(str(doc.year)),
+            sanitise_string(str(doc.month)),
+            sanitise_string(str(doc.volume)),
+            sanitise_string(str(doc.issue)),
+            ", ".join([sanitise_string(cat) for cat in doc.category_list]) 
+        ]
+        rows_data.append(row_data) 
+    
+    # Create a dataframe from the extracted data
+    columns = ["PDF Name", "PDF Text", "Title", "Authors", "DOI", "Year", "Month", "Volume", "Issue", "Categories"]
+    df = pd.DataFrame(rows_data, columns=columns)
+    
+    # Save the dataframe as an xlsx file
+    output_path = "XLSX/all_docs.xlsx"
+    df.to_excel(output_path, index=False)
+    print(f">> Converted ALL_DOCS into XLSX, saved @ {output_path} ..\n")
+    
+    return output_path
 
 # Vectorise the documents using TF-IDF
 def tfidf_vectorise(docs, preprocessor=None, ngram_range=(1,2), binary=False, analyzer='word', min_df=2):
@@ -244,6 +336,7 @@ if SCRIPT_MODE.strip() == "TRAIN":
     # ---- CONSTRUCT DOCUMENT OBJECTS
     print(colored(f"\n📄 CONSTRUCTING DOCUMENT OBJECTS", TERMINAL_MAIN_COLOR))
     make_documents()
+    create_xlsx_from_all_docs()
 
     # - MAKE VECTORISER (and vectorise training documents)
     print(colored(f"\n📄 MAKING and FIT-TRANSFORMING TF-IDF VECTORISER", TERMINAL_MAIN_COLOR))
@@ -253,17 +346,12 @@ if SCRIPT_MODE.strip() == "TRAIN":
     # output of fit_transform: will be a matrix, where each row is a document from the collection and each column is a word/n-gram from the learned vocabulary
 
     # Customizable TF-IDF options
-    preprocessor = None  # None >> We are already handling preprocessing elsewhere
-    ngram_range = (1, 2) # Define ngram range, get n-grams of these lengths
-    binary = False # False >> We want counts for each token, not just presence
-    analyzer = 'word' # We want word n-grams
-    min_df = 2 # 2 >> We want to remove any terms which only occur once
 
     # Fit the vectorizer on all texts
     X_RAW = [doc.pdftext for doc in ALL_DOCS] # all texts, in a list
     # print(f">> X_RAW is currently:\n{X_RAW[:10]} ..\n")
     print(f">> X_RAW has been made (not displaying all texts, as that would be too long)\n")
-    X_ALL, vectoriser = tfidf_vectorise(X_RAW, preprocessor, ngram_range, binary, analyzer, min_df)
+    X_ALL, vectoriser = tfidf_vectorise(X_RAW, TFIDF_PREPROCESSOR, TFIDF_NGRAM_RANGE, TFIDF_BINARY, TFIDF_ANALYSER, TFIDF_MIN_DF)
     print(f">> X_ALL is currently:\n{X_ALL[:10]} ..\n")
 
     # - ENCODE LABELS (MultiLabelBinarizer, into binary format
@@ -271,8 +359,8 @@ if SCRIPT_MODE.strip() == "TRAIN":
     # MLB replaces my previous set_golds_from_labels function, previously in the document class
     Y_RAW = [doc.category_list for doc in ALL_DOCS] # list of category lists
     print(f">> Y_RAW is currently:\n{Y_RAW[:10]} ..\n")
-    mlb = MultiLabelBinarizer(classes=OVERALL_CATEGORIES)
-    mlb.fit(OVERALL_CATEGORIES)
+    mlb = MultiLabelBinarizer(classes=USING_CATEGORIES)
+    mlb.fit(USING_CATEGORIES)
     # ---- TRANSFORM LABELS for each document
     Y_ALL = mlb.transform(Y_RAW)
     print(f">> Y_ALL is currently:\n{Y_ALL[:10]} ..\n")
@@ -281,9 +369,28 @@ if SCRIPT_MODE.strip() == "TRAIN":
     # NOTE: Implementation is using the common method of using a single primary category for stratification;
     # especially useful when the categories are imbalanced, to ensure training and test sets have similar distributions
     # of this primary category; does not ensure stratification across all categories, which can be more complex
-    print(colored(f"\n📄 SPLITTING DATA (TRAIN-TEST SPLIT)", TERMINAL_MAIN_COLOR))
+    print(colored(f"\n📄 SPLITTING DATA (TRAIN-TEST SPLIT using SKF)", TERMINAL_MAIN_COLOR))
     
-    X_TRAIN, X_TEST, Y_TRAIN, Y_TEST = train_test_split(X_ALL, Y_ALL, test_size=0.2)
+    # Convert multilabel data to single label
+    single_label = ["".join(map(str, label)) for label in Y_ALL]
+
+    # Initialize the StratifiedKFold instance with 5 splits
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+    # Get the train and test indices for the first split
+    train_indices, test_index = next(skf.split(X_ALL, single_label))
+
+    # Extract the training and testing data using these indices
+    X_TRAIN, X_TEST = X_ALL[train_indices], X_ALL[test_index]
+    single_label_train, single_label_test = [single_label[i] for i in train_indices], [single_label[i] for i in test_index]
+
+    # Convert single labels back to multilabel format
+    Y_TRAIN = [[int(char) for char in label] for label in single_label_train]
+    Y_TEST = [[int(char) for char in label] for label in single_label_test]
+    Y_TRAIN, Y_TEST = np.array(Y_TRAIN), np.array(Y_TEST)
+
+    #######
+    # PREVIOUSLY, simple split: X_TRAIN, X_TEST, Y_TRAIN, Y_TEST = train_test_split(X_ALL, Y_ALL, test_size=0.2)
 
     print(f">> After splitting, there are {X_TRAIN.shape[0]} training documents/rows and {X_TEST.shape[0]} test documents/rows -- {X_ALL.shape[0]} documents/rows total")
 
@@ -315,10 +422,10 @@ if SCRIPT_MODE.strip() == "TRAIN":
 
     # Vectorise the TEST_DOCS and evaluate the model
     Y_PRED = clf.predict(X_TEST)
-    report_dict = classification_report(Y_TEST, Y_PRED, target_names=OVERALL_CATEGORIES, zero_division=1, output_dict=True)
+    report_dict = classification_report(Y_TEST, Y_PRED, target_names=USING_CATEGORIES, zero_division=1, output_dict=True)
     # Here, zero division defines what to return if the denominator is 0 (due to some outcomes - true positives, false positives, true negatives, false negatives - possibly having no instances)
     report_dict['per_label_accuracy'] = (Y_TEST == Y_PRED).mean()
-    report_str = classification_report(Y_TEST, Y_PRED, target_names=OVERALL_CATEGORIES, zero_division=1) + f'\nper_label_accuracy: {report_dict["per_label_accuracy"]:.2f}\n'
+    report_str = classification_report(Y_TEST, Y_PRED, target_names=USING_CATEGORIES, zero_division=1) + f'\nper_label_accuracy: {report_dict["per_label_accuracy"]:.2f}\n'
     print(f"CLASSIFICATION REPORT:\n{report_str}")
 
     # - SAVE MODEL
