@@ -1,20 +1,6 @@
 ### AUTHOR - Ahn Michael
 ### GOAL - For internship in UA American Speech project, train a model to classify academic articles (PDFs)
 ###        into pre-defined categories, based on their texts, then output predictions to an XLSX
-
-#region - OPTIONS
-SCRIPT_MODE = "TRAIN" # which mode the script runs in; either TRAIN or PREDICT
-# for TRAIN mode, need to have an XLSX with PDF metadata and the PDFs to train on
-# for PREDICT mode, need to have an XLSX with PDFs you want to predict the categories of, and those PDFs in a folder
-TERMINAL_MAIN_COLOR = 'blue' # which color termcolor will use when outputting main script logs
-
-TFIDF_PREPROCESSOR = None  # None >> We are already handling preprocessing elsewhere
-TFIDF_NGRAM_RANGE = (1, 1) # Define ngram range, get n-grams of these lengths
-TFIDF_BINARY = False # False >> We want counts for each token, not just presence
-TFIDF_ANALYSER = 'word' # We want word n-grams
-TFIDF_MIN_DF = 2 # 2 >> We want to remove any terms which only occur once
-#endregion - OPTIONS
-
 #region - IMPORTS & INITIALISATION
 import os       # for navigating the file system
 import re       # mainly for text preprocessing / normalisation
@@ -33,9 +19,27 @@ import numpy as np
 os.system('clear') # clear the terminal
 #endregion - IMPORTS & INITIALISATION
 
+#region - OPTIONS
+SCRIPT_MODE = "TRAIN_TEST" # which mode the script runs in; TRAIN_TEST, FINAL_TRAIN, or PREDICT
+# for TRAIN_TEST mode, need to have an XLSX with PDF metadata and the PDFs to train on; will split data
+# for FINAL_TRAIN mode, need to have an XLSX with PDF metadata and the PDFs to train on; will use all PDFs/documents for training (no performance review)
+# for PREDICT mode, need to have an XLSX with PDFs you want to predict the categories of, and those PDFs in a folder
+TERMINAL_MAIN_COLOR = 'blue' # which color termcolor will use when outputting main script logs
+
+TFIDF_PREPROCESSOR = None  # None >> We are already handling preprocessing elsewhere
+TFIDF_NGRAM_RANGE = (1, 1) # Define ngram range, get n-grams of these lengths
+TFIDF_BINARY = False # False >> We want counts for each token, not just presence
+TFIDF_ANALYSER = 'word' # We want word n-grams
+TFIDF_MIN_DF = 2 # 2 >> We want to remove any terms which only occur once
+
+KFOLD_SPLITS = 5 # How many splits the Stratified KFOLD will use
+NUM_TOP_FEATURES = 20 # How many top-weighted features to see for each class
+#endregion - OPTIONS
+
 #region - COLLECTIONS
 ALL_CATEGORIES = ['UNKNOWN', 'CAT_0', 'CAT_1', 'CAT_2', 'CAT_2_1', 'CAT_3', 'CAT_3_1', 'CAT_4', 'CAT_4_1', 'CAT_5', 'CAT_5_1', 'CAT_6', 'CAT_7']
 USING_CATEGORIES = ['CAT_1', 'CAT_2', 'CAT_2_1', 'CAT_3', 'CAT_4', 'CAT_5', 'CAT_5_1', 'CAT_6', 'CAT_7']
+CATEGORIES_DETAILED_LABELS = ["AAL/AAVL (CAT_1)", "African Am. (CAT_2)", "African Diaspora (CAT_2_1)", "Mexican Am. & Latinx (CAT_3)", "Native Am. (CAT_4)", "Asian Am./Pacific Is. (CAT_5)", "Asian Diaspora (CAT_5_1)", "Women's Language (CAT_6)", "LGBTQ Speech (CAT_7)"]
 
 CWD_PATH = "" # this is initialised at the beginning of MAIN
 
@@ -53,6 +57,8 @@ TEST_DOCS = []
 
 X_RAW = [] # List of all document PDF texts >> will go into tfidf-vectoriser to get X
 Y_RAW = [] # List of category lists >> will go into multi-label binarizer to get Y
+
+FEATURE_NAMES = None
 
 X_ALL = []
 Y_ALL = []
@@ -318,8 +324,8 @@ def update_xlsx(xlsx_path, predictions):
 CWD_PATH = os.path.dirname(os.path.abspath(__file__))
 
 #region - TRAIN MODE
-print(colored(f"\n📄 ** SCRIPT START in TRAIN mode **", TERMINAL_MAIN_COLOR))
-if SCRIPT_MODE.strip() == "TRAIN":
+print(colored(f"\n📄 ** SCRIPT START in TEST_TRAIN mode **", TERMINAL_MAIN_COLOR))
+if SCRIPT_MODE.strip() == "TRAIN_TEST":
 
     # - READ IN DATA
     print(colored(f"\n📄 READING IN DATA", TERMINAL_MAIN_COLOR))
@@ -327,7 +333,7 @@ if SCRIPT_MODE.strip() == "TRAIN":
     # ---- READ IN EXCEL DATA
     # QUESTION: how should the excel data (the spreadsheet rows/columns) best be stored for the model training - dataframe, list of rows, actual dictionary?
     print(colored(f"\n📄 READING EXCEL DATA", TERMINAL_MAIN_COLOR))
-    read_xlsx("american-speech-dataset-complete-rows.xlsx")
+    read_xlsx("american-speech-dataset-complete-rows-final-sep-13-2023.xlsx")
 
     # ---- READ IN PDF DATA
     print(colored(f"\n📄 READING PDF DATA", TERMINAL_MAIN_COLOR))
@@ -353,6 +359,8 @@ if SCRIPT_MODE.strip() == "TRAIN":
     print(f">> X_RAW has been made (not displaying all texts, as that would be too long)\n")
     X_ALL, vectoriser = tfidf_vectorise(X_RAW, TFIDF_PREPROCESSOR, TFIDF_NGRAM_RANGE, TFIDF_BINARY, TFIDF_ANALYSER, TFIDF_MIN_DF)
     print(f">> X_ALL is currently:\n{X_ALL[:10]} ..\n")
+    FEATURE_NAMES = vectoriser.get_feature_names_out()
+    print(f"FEATURE_NAMES preview: {FEATURE_NAMES[:100]} ..")
 
     # - ENCODE LABELS (MultiLabelBinarizer, into binary format
     print(colored(f"\n📄 ENCODING LABELS with MLB", TERMINAL_MAIN_COLOR))
@@ -374,8 +382,8 @@ if SCRIPT_MODE.strip() == "TRAIN":
     # Convert multilabel data to single label
     single_label = ["".join(map(str, label)) for label in Y_ALL]
 
-    # Initialize the StratifiedKFold instance with 5 splits
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    # Initialize the StratifiedKFold instance with KFOLD_SPLITS splits
+    skf = StratifiedKFold(n_splits=KFOLD_SPLITS, shuffle=True, random_state=42)
 
     # Get the train and test indices for the first split
     train_indices, test_index = next(skf.split(X_ALL, single_label))
@@ -416,16 +424,37 @@ if SCRIPT_MODE.strip() == "TRAIN":
     print(colored(f"\n📄 REVIEWING PERFORMANCE", TERMINAL_MAIN_COLOR))
 
     print(f"-- This training was on {X_TRAIN.shape[0]} documents (out of {X_ALL.shape[0]} total documents)\n")
+    print(f"TFIDF settings - PREPROCESSOR {TFIDF_PREPROCESSOR}, NGRAM_RANGE {TFIDF_NGRAM_RANGE}, BINARY {TFIDF_BINARY}, ANALYSER {TFIDF_ANALYSER}, MIN_DF {TFIDF_MIN_DF}")
+    print(f"Stratified K-Fold - KFOLD_SPLITS: {KFOLD_SPLITS}\n")
+
+    for i, class_label in enumerate(clf.classes_):
+        estimator = clf.estimators_[i]
+
+        top_pos_indices = np.argsort(estimator.coef_[0])[-NUM_TOP_FEATURES:][::-1]
+        top_pos_weights = estimator.coef_[0][top_pos_indices]
+        print(f">> Top {NUM_TOP_FEATURES} positive features for class {class_label} ({CATEGORIES_DETAILED_LABELS[i]}):")
+        pos_index_weight_list = []
+        for index, weight in zip(top_pos_indices, top_pos_weights):
+            pos_index_weight_list.append(f"{FEATURE_NAMES[index]} ({weight:.5f})")
+        print(f"{pos_index_weight_list}\n")
+
+        top_neg_indices = np.argsort(estimator.coef_[0])[:NUM_TOP_FEATURES]
+        top_neg_weights = estimator.coef_[0][top_neg_indices]
+        print(f">> Top {NUM_TOP_FEATURES} negative features for class {class_label} ({CATEGORIES_DETAILED_LABELS[i]}):")
+        neg_index_weight_list = []
+        for index, weight in zip(top_neg_indices, top_neg_weights):
+            neg_index_weight_list.append(f"{FEATURE_NAMES[index]} ({weight:.5f})")
+        print(f"{neg_index_weight_list}\n\n")
 
     subset_accuracy = clf.score(X_TEST, Y_TEST)
     print(f"SUBSET ACCURACY: {subset_accuracy * 100:.2f}%")
 
     # Vectorise the TEST_DOCS and evaluate the model
     Y_PRED = clf.predict(X_TEST)
-    report_dict = classification_report(Y_TEST, Y_PRED, target_names=USING_CATEGORIES, zero_division=1, output_dict=True)
+    report_dict = classification_report(Y_TEST, Y_PRED, labels=range(len(USING_CATEGORIES)), target_names=CATEGORIES_DETAILED_LABELS, zero_division=1, output_dict=True)
     # Here, zero division defines what to return if the denominator is 0 (due to some outcomes - true positives, false positives, true negatives, false negatives - possibly having no instances)
     report_dict['per_label_accuracy'] = (Y_TEST == Y_PRED).mean()
-    report_str = classification_report(Y_TEST, Y_PRED, target_names=USING_CATEGORIES, zero_division=1) + f'\nper_label_accuracy: {report_dict["per_label_accuracy"]:.2f}\n'
+    report_str = classification_report(Y_TEST, Y_PRED, labels=range(len(USING_CATEGORIES)), target_names=CATEGORIES_DETAILED_LABELS, zero_division=1) + f'\nper_label_accuracy: {report_dict["per_label_accuracy"]:.2f}\n'
     print(f"CLASSIFICATION REPORT:\n{report_str}")
 
     # - SAVE MODEL
@@ -437,11 +466,16 @@ if SCRIPT_MODE.strip() == "TRAIN":
     print(f">> Successfully saved classifier as {clf_save_name} and vectoriser as {vectoriser_save_name}")
 
     # - SCRIPT COMPLETE
-    print(colored(f"\n📄 SCRIPT (train mode) COMPLETED SUCCESSFULLY ✅\n", TERMINAL_MAIN_COLOR))
+    print(colored(f"\n📄 SCRIPT (train_test mode) COMPLETED SUCCESSFULLY ✅\n", TERMINAL_MAIN_COLOR))
 #endregion - TRAIN MODE
 
+elif SCRIPT_MODE.strip() == "FINAL_TRAIN":
+    # - SCRIPT COMPLETE
+    print(colored(f"\n📄 SCRIPT (final_train mode) COMPLETED SUCCESSFULLY ✅\n", TERMINAL_MAIN_COLOR))
+    pass
+
 #region - PREDICT MODE
-else:
+elif SCRIPT_MODE.strip() == "PREDICT":
     print(colored(f"\n📄 ** SCRIPT START in PREDICT mode **\n", TERMINAL_MAIN_COLOR))
 
     # - LOAD MODEL & VECTORISER DATA
@@ -471,4 +505,7 @@ else:
     # - SCRIPT COMPLETE
     print(colored(f"\n📄 SCRIPT (predict mode) COMPLETED SUCCESSFULLY ✅", TERMINAL_MAIN_COLOR))
 #endregion - PREDICT MODE
+
+else:
+    print(f"SCRIPT_MODE set to <{SCRIPT_MODE}> does not match an existing script mode (use one of these: TRAIN_TEST, FINAL_TRAIN, PREDICT)")
 #endregion - MAIN
